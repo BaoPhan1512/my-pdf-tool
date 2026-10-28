@@ -5,6 +5,7 @@ import {
 } from './core.js';
 import { icon } from './icons.js';
 import { createFormatBar, colorButton } from './formatbar.js';
+import { legacyKind, decodeLegacy } from './vn-legacy.js';
 
 const hexToRgb = (hex) => {
   const n = parseInt(hex.slice(1), 16);
@@ -168,7 +169,7 @@ export function createEditor(root, file, mode, password) {
       r.family = /courier|cousine|mono|consol/i.test(fn) ? 'cousine' : /times|tinos|roman|georgia|garamond|cambria|minion|palatino|bookman|century|serif(?!.*sans)/i.test(fn) && !/sans/i.test(fn) ? 'tinos'
         : /arial|arimo|helvetica|calibri|roboto|segoe|tahoma|verdana|sans/i.test(fn) ? 'arimo'
         : font?.fallbackName === 'serif' || tc.styles[r.fontName]?.fontFamily === 'serif' ? 'tinos' : 'arimo';
-      r.text = r.text.replace(/\s+$/, '').normalize('NFC');
+      r.text = decodeLegacy(r.text, legacyKind(font?.name)).replace(/\s+$/, '').normalize('NFC');
       const box = { x: (r.x - 1) / p.ptW, y: (r.base - r.size * 0.92) / p.ptH, w: (r.w + 2) / p.ptW, h: (r.size * 1.2) / p.ptH };
       const el = h('div', { class: 'tline', title: 'Bấm để sửa', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` });
       el.addEventListener('pointerdown', (e) => {

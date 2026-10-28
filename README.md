@@ -11,7 +11,7 @@ Lấy cảm hứng từ Smallpdf, giao diện tiếng Việt, tự co giãn trê
 | --- | --- |
 | Sắp xếp | Gộp PDF, Tách PDF, Xóa trang, Trích xuất trang, Sắp xếp trang, Xoay PDF |
 | Nén | Nén PDF (4 mức) |
-| Chuyển đổi | PDF sang Ảnh (JPG/PNG), Ảnh sang PDF, Lấy chữ từ PDF, hướng dẫn Office ↔ PDF và AI |
+| Chuyển đổi | PDF sang Word, PDF sang Excel, PDF sang PowerPoint (giữ đúng chữ tiếng Việt, tự chuyển phông TCVN3/VNI, nhận dạng chữ bản scan), PDF sang Ảnh (JPG/PNG), Ảnh sang PDF, Lấy chữ từ PDF, hướng dẫn Office ↔ PDF và AI |
 | Chỉnh sửa | Sửa chữ PDF (sửa trực tiếp chữ có sẵn, thanh định dạng kiểu Word với 16 phông tiếng Việt), Chú thích (chữ, bút vẽ, tô sáng, khung, che trắng, ảnh), Đánh số trang, Watermark, Cắt lề, Che thông tin |
 | Ký tên | Vẽ / gõ / tải ảnh chữ ký, thêm ngày, thêm chữ |
 | Bảo mật | Khóa PDF bằng mật khẩu, Mở khóa PDF, Làm phẳng PDF |

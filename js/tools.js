@@ -30,6 +30,9 @@ const field = (label, control, help) => h('div', { class: 'field' }, h('label', 
 const input = (attrs, onInput) => { const el = h('input', { class: 'input', ...attrs }); el.addEventListener('input', () => onInput(el.type === 'number' || el.type === 'range' ? +el.value : el.type === 'checkbox' ? el.checked : el.value)); return el; };
 const check = (label, value, onChange) => { const el = h('input', { type: 'checkbox', checked: value }); el.addEventListener('change', () => onChange(el.checked)); return h('label', { class: 'check' }, el, ' ', label); };
 const outName = (file, suffix, ext = 'pdf') => `${baseName(file.name)}${suffix}.${ext}`;
+const conv = () => import('./convert.js');
+const ocrField = (o) => field('Nhận dạng chữ (OCR)', seg('ocr', [{ value: 'auto', label: 'Tự động', sub: 'Chỉ trang scan / lỗi chữ' }, { value: 'always', label: 'Mọi trang', sub: 'Khi kết quả bị lỗi chữ' }], o.ocr, (v) => { o.ocr = v; }));
+const convertHelp = () => h('div', { class: 'help' }, 'PDF có chữ: lấy đúng từng ký tự gốc, tự sửa phông cũ .VnTime / VNI sang Unicode. PDF scan (ảnh chụp): tự nhận dạng chữ tiếng Việt ngay trên máy bạn, không gửi file đi đâu, nhưng nên dò lại vì chữ mờ có thể đọc sai.');
 
 async function copyAll(src) {
   const out = await PDFDocument.create();
@@ -285,6 +288,51 @@ export const TOOLS = [
         text, note: empty ? 'Không tìm thấy chữ. Có thể đây là bản scan (ảnh chụp), cần công cụ OCR để nhận dạng chữ.' : null,
       });
     },
+  },
+
+  {
+    id: 'pdf-sang-word', name: 'PDF sang Word', desc: 'Chuyển PDF thành file Word (.docx) sửa được. Giữ đúng chữ tiếng Việt, đọc được cả bản scan.',
+    icon: 'file-type', color: '#2b579a', cat: 'convert', popular: true,
+    accept: 'pdf', workspace: 'single', action: 'Chuyển sang Word',
+    defaults: { ocr: 'auto', mark: true, images: true },
+    options(o) {
+      return h('div', {}, ocrField(o),
+        check('Giữ hình ảnh trong PDF', o.images, (v) => { o.images = v; }),
+        check('Tô vàng chữ nhận dạng chưa chắc chắn (bản scan) để dễ dò lại', o.mark, (v) => { o.mark = v; }),
+        convertHelp());
+    },
+    async run({ files: [file], opts, password, progress }) { return (await conv()).toWord(file, { opts, password, progress }); },
+  },
+  {
+    id: 'pdf-sang-excel', name: 'PDF sang Excel', desc: 'Lấy bảng biểu trong PDF ra file Excel (.xlsx), mỗi ô một dữ liệu. Đọc được cả bản scan.',
+    icon: 'sheet', color: '#217346', cat: 'convert', popular: true,
+    accept: 'pdf', workspace: 'single', action: 'Chuyển sang Excel',
+    defaults: { ocr: 'auto', sheet: 'each', numbers: false },
+    options(o) {
+      return h('div', {}, ocrField(o),
+        field('Cách xếp trang', seg('sheet', [{ value: 'each', label: 'Mỗi trang 1 sheet' }, { value: 'one', label: 'Gộp vào 1 sheet' }], o.sheet, (v) => { o.sheet = v; })),
+        check('Đổi ô chứa số (vd: 1.250.000) thành số để tính toán', o.numbers, (v) => { o.numbers = v; }),
+        h('div', { class: 'help' }, 'Mặc định mọi ô giữ nguyên đúng từng ký tự như trong PDF (kể cả số 0 ở đầu, dấu chấm, dấu phẩy).'),
+        convertHelp());
+    },
+    async run({ files: [file], opts, password, progress }) { return (await conv()).toExcel(file, { opts, password, progress }); },
+  },
+  {
+    id: 'pdf-sang-powerpoint', name: 'PDF sang PowerPoint', desc: 'Biến mỗi trang PDF thành một slide PowerPoint (.pptx) có chữ sửa được.',
+    icon: 'presentation', color: '#d24726', cat: 'convert', popular: true,
+    accept: 'pdf', workspace: 'single', action: 'Chuyển sang PowerPoint',
+    defaults: { mode: 'edit', ocr: 'auto', mark: false, images: true },
+    options(o) {
+      const extra = h('div', {}, ocrField(o),
+        check('Giữ hình ảnh trong PDF', o.images, (v) => { o.images = v; }),
+        check('Tô vàng chữ nhận dạng chưa chắc chắn (bản scan)', o.mark, (v) => { o.mark = v; }));
+      const sync = () => { extra.hidden = o.mode === 'image'; };
+      sync();
+      return h('div', {},
+        field('Kiểu slide', seg('mode', [{ value: 'edit', label: 'Sửa được chữ', sub: 'Chữ, ảnh tách riêng' }, { value: 'image', label: 'Giữ nguyên hình thức', sub: 'Slide là ảnh trang' }], o.mode, (v) => { o.mode = v; sync(); })),
+        extra, convertHelp());
+    },
+    async run({ files: [file], opts, password, progress }) { return (await conv()).toPowerPoint(file, { opts, password, progress }); },
   },
 
   /* ============ CHỈNH SỬA ============ */
@@ -569,8 +617,8 @@ export const GUIDES = [
       <ol><li>Tải <a href="https://vi.libreoffice.org/" target="_blank" rel="noopener">LibreOffice</a> (miễn phí, tiếng Việt).</li><li>Mở file → <b>Tệp</b> → <b>Xuất ra PDF</b>.</li></ol>
       <h3>Trên điện thoại</h3>
       <ol><li>Mở file bằng Google Docs / Google Sheets / Word trên điện thoại.</li><li>Chọn <b>Chia sẻ & xuất</b> → <b>Lưu dưới dạng / In</b> → <b>PDF</b>.</li></ol>
-      <h3>PDF sang Word</h3>
-      <p>Dùng công cụ <a href="#/pdf-sang-van-ban">Lấy chữ từ PDF</a> để sao chép chữ vào Word. Hoặc mở PDF bằng <b>Microsoft Word</b> (File → Open) hoặc <b>Google Docs</b> (tải lên Drive → Mở bằng Google Docs): cả hai đều tự chuyển PDF thành văn bản sửa được, miễn phí.</p>`,
+      <h3>Chiều ngược lại: PDF sang Office</h3>
+      <p>Dùng các công cụ <a href="#/pdf-sang-word">PDF sang Word</a>, <a href="#/pdf-sang-excel">PDF sang Excel</a>, <a href="#/pdf-sang-powerpoint">PDF sang PowerPoint</a> ngay trên trang này.</p>`,
   },
   {
     id: 'ai-pdf', name: 'Tóm tắt, dịch, hỏi đáp PDF bằng AI', icon: 'sparkles', color: '#2b6cff', cat: 'convert',
