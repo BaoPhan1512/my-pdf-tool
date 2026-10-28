@@ -289,6 +289,18 @@ export const TOOLS = [
 
   /* ============ CHỈNH SỬA ============ */
   {
+    id: 'sua-chu-pdf', name: 'Sửa chữ PDF', desc: 'Sửa trực tiếp chữ có sẵn trong file PDF, thêm chữ mới hoặc xóa nội dung. Hỗ trợ tiếng Việt.',
+    icon: 'type', color: '#14b8a6', cat: 'edit', popular: true,
+    accept: 'pdf', workspace: 'editor', editorMode: 'edittext', action: 'Lưu PDF',
+    options() { return h('div', { class: 'help' }, 'Mẹo: chữ cũ được phủ kín và thay bằng chữ mới. Với thông tin nhạy cảm (số tài khoản, CCCD...), hãy dùng thêm công cụ "Che thông tin" để xóa hẳn.'); },
+    async run({ files: [file], editor, password }) {
+      if (!editor.count) throw new Error('Bạn chưa sửa nội dung nào. Bấm vào dòng chữ trên trang để sửa.');
+      const doc = await loadPdfLib(file, password);
+      await editor.apply(doc);
+      return [{ name: outName(file, '-da-sua'), blob: pdfBlob(await saveDoc(doc)) }];
+    },
+  },
+  {
     id: 'chu-thich-pdf', name: 'Chú thích PDF', desc: 'Thêm chữ, vẽ, tô sáng, đóng khung hoặc che trắng nội dung trên PDF.',
     icon: 'pencil', color: '#14b8a6', cat: 'edit', popular: true,
     accept: 'pdf', workspace: 'editor', editorMode: 'annotate', action: 'Lưu PDF',

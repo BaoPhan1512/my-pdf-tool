@@ -1,15 +1,17 @@
 // Trình chỉnh sửa trang: ký tên, chú thích, che thông tin
 import {
   h, $, $$, openPdfjs, renderPage, toast, modal, displaySize, drawImageBox, drawRectBox,
-  textToPng, canvasPngBytes, rgb, readBytes, PDFLib,
+  textToPng, canvasPngBytes, rgb, readBytes, PDFLib, embedVnFont, drawTextLines, BASELINE, pdfjsLib, fontCss,
 } from './core.js';
 import { icon } from './icons.js';
+import { createFormatBar, colorButton } from './formatbar.js';
 
 const hexToRgb = (hex) => {
   const n = parseInt(hex.slice(1), 16);
   return rgb(((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255);
 };
 const uid = () => Math.random().toString(36).slice(2, 9);
+const TEXT_KEYS = ['font', 'size', 'color', 'bg', 'bold', 'italic', 'underline', 'strike', 'align'];
 
 const TOOLSETS = {
   sign: [
@@ -28,6 +30,13 @@ const TOOLSETS = {
     { id: 'whiteout', label: 'Che trắng', icon: 'eraser' },
     { id: 'image', label: 'Ảnh', icon: 'image', action: true },
   ],
+  edittext: [
+    { id: 'edit', label: 'Sửa chữ', icon: 'type' },
+    { id: 'text', label: 'Thêm chữ', icon: 'plus' },
+    { id: 'whiteout', label: 'Xóa vùng', icon: 'eraser' },
+    { id: 'select', label: 'Di chuyển', icon: 'grip-vertical' },
+    { id: 'image', label: 'Ảnh', icon: 'image', action: true },
+  ],
   redact: [
     { id: 'redact', label: 'Vẽ ô che', icon: 'square' },
     { id: 'select', label: 'Chọn / di chuyển', icon: 'grip-vertical' },
@@ -35,7 +44,11 @@ const TOOLSETS = {
 };
 
 export function createEditor(root, file, mode, password) {
-  const state = { tool: mode === 'redact' ? 'redact' : mode === 'sign' ? 'select' : 'text', color: mode === 'annotate' ? '#e53935' : '#000000', size: 14, items: [], pages: [] };
+  const state = {
+    tool: { redact: 'redact', sign: 'select', edittext: 'edit' }[mode] || 'text',
+    color: mode === 'annotate' ? '#e53935' : '#000000', size: 14, font: 'arimo', bg: null, bold: false, italic: false, underline: false, strike: false, align: 'left',
+    items: [], pages: [],
+  };
   const toolbar = h('div', { class: 'editor-toolbar' });
   const pagesBox = h('div', { class: 'editor-pages' });
   const hint = h('div', { class: 'editor-hint' });
@@ -43,24 +56,29 @@ export function createEditor(root, file, mode, password) {
 
   // ---------- Thanh công cụ ----------
   const tools = TOOLSETS[mode];
+  const toolsRow = h('div', { class: 'tools-row' });
+  toolbar.append(toolsRow);
   for (const t of tools) {
-    toolbar.append(h('button', {
+    toolsRow.append(h('button', {
       class: 'tool-btn', 'data-tool': t.id, title: t.label,
       onclick: () => (t.action ? runAction(t.id) : setTool(t.id)),
       html: `${icon(t.icon, 18)}<span>${t.label}</span>`,
     }));
   }
+  toolsRow.append(h('button', { class: 'tool-btn', title: 'Hoàn tác', onclick: undo, html: `${icon('undo-2', 18)}<span>Hoàn tác</span>` }));
+  let fb = null;
   if (mode !== 'redact') {
-    const colors = ['#000000', '#1e40af', '#e53935', '#2e7d32', '#f9a825'];
-    const sw = h('div', { class: 'swatches' }, colors.map((c) => h('button', {
-      class: `swatch${c === state.color ? ' on' : ''}`, style: `background:${c}`, 'aria-label': `Màu ${c}`,
-      onclick: (e) => { state.color = c; $$('.swatch', toolbar).forEach((s) => s.classList.remove('on')); e.currentTarget.classList.add('on'); applyToSelected(); },
-    })));
-    const size = h('select', { class: 'size-select', 'aria-label': 'Cỡ chữ / nét vẽ', onchange: (e) => { state.size = +e.target.value; applyToSelected(); } },
-      [10, 12, 14, 18, 24, 32, 48].map((s) => h('option', { value: s, selected: s === state.size }, `${s}`)));
-    toolbar.append(sw, h('label', { class: 'size-label' }, 'Cỡ ', size));
+    fb = createFormatBar(state, () => applyToSelected());
+    if (mode === 'annotate') toolsRow.append(colorButton(state, () => { fb.sync(); applyToSelected(); }, 'Màu nét').el);
+    toolbar.append(fb.el);
   }
-  toolbar.append(h('button', { class: 'tool-btn', title: 'Hoàn tác', onclick: undo, html: `${icon('undo-2', 18)}<span>Hoàn tác</span>` }));
+  // Phím tắt như Word khi đang gõ chữ
+  pagesBox.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || !fb || !e.target.classList.contains('etext')) return;
+    const k = { b: 'bold', i: 'italic', u: 'underline' }[e.key.toLowerCase()];
+    if (!k) return;
+    e.preventDefault(); state[k] = !state[k]; fb.sync(); applyToSelected();
+  });
 
   function setTool(id) {
     state.tool = id;
@@ -72,8 +90,9 @@ export function createEditor(root, file, mode, password) {
       draw: 'Giữ chuột / ngón tay và vẽ trên trang.',
       highlight: 'Kéo trên trang để tô sáng một vùng.',
       rect: 'Kéo trên trang để vẽ khung.',
-      whiteout: 'Kéo trên trang để che trắng một vùng (ví dụ để xóa chữ cũ, rồi thêm chữ mới).',
+      whiteout: mode === 'edittext' ? 'Kéo trên trang để xóa trắng một vùng (chữ, hình...).' : 'Kéo trên trang để che trắng một vùng (ví dụ để xóa chữ cũ, rồi thêm chữ mới).',
       redact: 'Kéo trên trang để vẽ ô đen che thông tin nhạy cảm.',
+      edit: 'Bấm vào dòng chữ có sẵn (khung xanh) để sửa. Xóa hết chữ trong ô để xóa dòng đó. Đổi cỡ, màu, đậm/nghiêng ở thanh công cụ.',
     };
     hint.textContent = hints[id] || '';
   }
@@ -116,7 +135,95 @@ export function createEditor(root, file, mode, password) {
     if (p.rendered) return;
     p.rendered = true;
     const ratio = Math.min(2, window.devicePixelRatio || 1);
-    await renderPage(pdf, i, { width: Math.min(1400, p.wrap.clientWidth * ratio), canvas: p.canvas });
+    const { page } = await renderPage(pdf, i, { width: Math.min(1600, p.wrap.clientWidth * ratio * 1.25), canvas: p.canvas });
+    if (mode === 'edittext') await buildTextLayer(i, page).catch((e) => console.warn(e));
+  }
+
+  // ---------- Nhận diện các dòng chữ có sẵn để sửa ----------
+  async function buildTextLayer(i, page) {
+    const p = state.pages[i];
+    const vp = page.getViewport({ scale: 1 });
+    const tc = await page.getTextContent();
+    const runs = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim()) { if (runs.length && it.str) runs[runs.length - 1].pendingSpace = true; continue; }
+      const t = pdfjsLib.Util.transform(vp.transform, it.transform);
+      if (Math.abs(t[1]) > 0.01 || Math.abs(t[2]) > 0.01 || t[0] <= 0) continue; // bỏ qua chữ xoay
+      const size = Math.hypot(t[2], t[3]);
+      if (size < 3) continue;
+      const x = t[4], base = t[5], w = it.width * (vp.scale || 1);
+      const last = runs[runs.length - 1];
+      if (last && it.fontName === last.fontName && Math.abs(last.base - base) < size * 0.3 && Math.abs(last.size - size) < 0.5 && x - (last.x + last.w) < size * 0.8 && x >= last.x + last.w - size * 0.5) {
+        const gap = x - (last.x + last.w);
+        last.text += ((gap > size * 0.15 || last.pendingSpace) && !last.text.endsWith(' ') && !it.str.startsWith(' ') ? ' ' : '') + it.str;
+        last.w = x + w - last.x; last.pendingSpace = false;
+      } else runs.push({ text: it.str, x, base, w, size, fontName: it.fontName, pendingSpace: false });
+    }
+    for (const r of runs) {
+      const font = page.commonObjs.has(r.fontName) ? page.commonObjs.get(r.fontName) : null;
+      const fname = `${font?.name || ''} ${font?.fallbackName || ''} ${tc.styles[r.fontName]?.fontFamily || ''}`;
+      r.bold = !!font?.bold || !!font?.black || /bold|black|heavy|semibold|demi/i.test(fname);
+      r.italic = !!font?.italic || /italic|oblique/i.test(fname);
+      const fn = `${font?.name || ''}`;
+      r.family = /courier|cousine|mono|consol/i.test(fn) ? 'cousine' : /times|tinos|roman|georgia|garamond|cambria|minion|palatino|bookman|century|serif(?!.*sans)/i.test(fn) && !/sans/i.test(fn) ? 'tinos'
+        : /arial|arimo|helvetica|calibri|roboto|segoe|tahoma|verdana|sans/i.test(fn) ? 'arimo'
+        : font?.fallbackName === 'serif' || tc.styles[r.fontName]?.fontFamily === 'serif' ? 'tinos' : 'arimo';
+      r.text = r.text.replace(/\s+$/, '').normalize('NFC');
+      const box = { x: (r.x - 1) / p.ptW, y: (r.base - r.size * 0.92) / p.ptH, w: (r.w + 2) / p.ptW, h: (r.size * 1.2) / p.ptH };
+      const el = h('div', { class: 'tline', title: 'Bấm để sửa', style: `left:${box.x * 100}%;top:${box.y * 100}%;width:${box.w * 100}%;height:${box.h * 100}%` });
+      el.addEventListener('pointerdown', (e) => {
+        if (state.tool !== 'edit') return;
+        e.preventDefault(); e.stopPropagation();
+        editRun(i, r, box, el);
+      });
+      p.overlay.append(el);
+    }
+  }
+
+  function sampleColors(i, box) {
+    const p = state.pages[i];
+    const c = p.canvas, k = c.width;
+    const ctx = c.getContext('2d');
+    const x0 = Math.max(0, Math.floor(box.x * k)), y0 = Math.max(0, Math.floor(box.y * c.height));
+    const w = Math.max(1, Math.min(c.width - x0, Math.ceil(box.w * k))), hh = Math.max(1, Math.min(c.height - y0, Math.ceil(box.h * c.height)));
+    const d = ctx.getImageData(x0, y0, w, hh).data;
+    const counts = new Map();
+    const edge = [];
+    for (let y = 0; y < hh; y++) for (let x = 0; x < w; x++) if (y < 2 || y >= hh - 2 || x < 2 || x >= w - 2) edge.push((y * w + x) * 4);
+    for (const o of edge) { const key = ((d[o] >> 3) << 10) | ((d[o + 1] >> 3) << 5) | (d[o + 2] >> 3); counts.set(key, (counts.get(key) || 0) + 1); }
+    let bgKey = 0, best = -1;
+    for (const [kk, v] of counts) if (v > best) { best = v; bgKey = kk; }
+    const bgPx = edge.filter((o) => (((d[o] >> 3) << 10) | ((d[o + 1] >> 3) << 5) | (d[o + 2] >> 3)) === bgKey);
+    const bg = [0, 1, 2].map((j) => Math.round(bgPx.reduce((a, o) => a + d[o + j], 0) / Math.max(1, bgPx.length)));
+    let maxD = 0; const px = [];
+    for (let o = 0; o < d.length; o += 4) {
+      const dist = Math.abs(d[o] - bg[0]) + Math.abs(d[o + 1] - bg[1]) + Math.abs(d[o + 2] - bg[2]);
+      if (dist > maxD) maxD = dist;
+      px.push([dist, o]);
+    }
+    const ink = px.filter(([dd]) => dd > maxD * 0.7);
+    const avg = [0, 1, 2].map((j) => Math.round(ink.reduce((a, [, o]) => a + d[o + j], 0) / Math.max(1, ink.length)));
+    const hex = (a) => `#${a.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('')}`;
+    return { bg: hex(bg), fg: maxD > 60 ? hex(avg) : '#000000' };
+  }
+
+  function editRun(i, r, box, marker) {
+    const p = state.pages[i];
+    const { bg, fg } = sampleColors(i, box);
+    marker.remove();
+    const cover = { id: uid(), page: i, type: 'cover', color: bg, x: box.x, y: box.y, w: box.w, h: box.h };
+    state.items.push(cover); renderItem(cover);
+    const size = Math.round(r.size * 10) / 10;
+    const it = {
+      id: uid(), page: i, type: 'text', text: r.text, color: fg, size, font: r.family, bold: r.bold, italic: r.italic, underline: false, strike: false, bg: null, align: 'left',
+      x: r.x / p.ptW, y: (r.base - size * BASELINE) / p.ptH, w: 0, h: 0, cover: cover.id,
+    };
+    state.items.push(it);
+    const el = renderItem(it);
+    const ed = $('.etext', el);
+    ed.focus();
+    const sel = window.getSelection(); sel.selectAllChildren(ed); sel.collapseToEnd();
+    select(it);
   }
 
   // ---------- Thao tác trên trang ----------
@@ -130,6 +237,7 @@ export function createEditor(root, file, mode, password) {
       if (e.target !== overlay && !e.target.classList.contains('edraw')) return;
       const t = state.tool;
       if (t === 'select') { select(null); return; }
+      if (t === 'edit') { select(null); return; }
       const start = relPos(e, overlay);
       if (t === 'text') { e.preventDefault(); addText(i, start.x, start.y); return; }
       overlay.setPointerCapture(e.pointerId);
@@ -178,15 +286,16 @@ export function createEditor(root, file, mode, password) {
     if (it.type === 'text') {
       const ed = h('div', { class: 'etext', contenteditable: 'true', spellcheck: 'false' });
       ed.textContent = it.text || '';
-      ed.style.color = it.color; ed.style.fontSize = `calc(var(--s) * ${it.size}px)`;
+      styleText(ed, it);
       ed.addEventListener('input', () => { it.text = ed.innerText; });
       ed.addEventListener('focus', () => select(it));
-      ed.addEventListener('blur', () => { if (!ed.innerText.trim()) removeItem(it); });
+      ed.addEventListener('blur', () => { if (!ed.innerText.trim() && !it.cover) removeItem(it); });
       el.append(ed);
     }
     if (it.type === 'rect') el.style.borderColor = it.color;
     if (it.type === 'highlight') el.style.background = it.color;
     el.append(h('button', { class: 'eitem-del', 'aria-label': 'Xóa', onpointerdown: (e) => e.stopPropagation(), onclick: () => removeItem(it), html: '&times;' }));
+    if (it.type === 'cover') { el.style.background = it.color; place(el, it); overlay.prepend(el); return el; }
     if (it.type !== 'text') el.append(h('span', { class: 'eitem-resize', 'aria-hidden': 'true' }));
     place(el, it);
     overlay.append(el);
@@ -227,27 +336,41 @@ export function createEditor(root, file, mode, password) {
 
   function select(it) {
     state.selected = it;
+    if (it?.type === 'text' && fb) {
+      for (const k of TEXT_KEYS) state[k] = it[k];
+      fb.sync();
+    }
     $$('.eitem', pagesBox).forEach((el) => el.classList.toggle('selected', it && el.dataset.id === it.id));
   }
   function applyToSelected() {
     const it = state.selected;
     if (!it) return;
     const el = $(`.eitem[data-id="${it.id}"]`, pagesBox);
-    if (it.type === 'text') { it.color = state.color; it.size = state.size; const ed = $('.etext', el); ed.style.color = it.color; ed.style.fontSize = `calc(var(--s) * ${it.size}px)`; }
+    if (it.type === 'text') { for (const k of TEXT_KEYS) it[k] = state[k]; styleText($('.etext', el), it); }
     if (it.type === 'rect' || it.type === 'highlight') { it.color = state.color; el.style.borderColor = it.color; if (it.type === 'highlight') el.style.background = it.color; }
   }
   function removeItem(it) {
     state.items = state.items.filter((x) => x !== it);
     $(`.eitem[data-id="${it.id}"]`, pagesBox)?.remove();
   }
+  function styleText(ed, it) {
+    ed.style.color = it.color; ed.style.fontSize = `calc(var(--s) * ${it.size}px)`;
+    ed.style.fontFamily = fontCss(it.font);
+    ed.style.fontWeight = it.bold ? '700' : '400'; ed.style.fontStyle = it.italic ? 'italic' : 'normal';
+    ed.style.textDecoration = [it.underline && 'underline', it.strike && 'line-through'].filter(Boolean).join(' ') || 'none';
+    ed.style.backgroundColor = it.bg || 'transparent';
+    ed.style.textAlign = it.align || 'left';
+  }
   function undo() {
     const it = state.items.pop();
     if (!it) return;
+    if (it.cover) { const c = state.items.find((x) => x.id === it.cover); if (c) { state.items = state.items.filter((x) => x !== c); $(`.eitem[data-id="${c.id}"]`, pagesBox)?.remove(); } }
     if (it.type === 'draw') renderDraw(it.page); else $(`.eitem[data-id="${it.id}"]`, pagesBox)?.remove();
   }
 
   function addText(page, x, y, text = '') {
-    const it = { id: uid(), page, type: 'text', x, y, text, color: state.color, size: state.size };
+    const it = { id: uid(), page, type: 'text', x, y, text };
+    for (const k of TEXT_KEYS) it[k] = state[k];
     state.items.push(it);
     const el = renderItem(it);
     const ed = $('.etext', el);
@@ -316,13 +439,17 @@ export function createEditor(root, file, mode, password) {
       } else if (it.type === 'text') {
         if (!it.text?.trim()) continue;
         const scale = PW / state.pages[it.page].ptW; // = 1 nếu cùng kích thước
-        const t = textToPng(it.text.replace(/\n$/, ''), { size: it.size * scale, color: it.color, weight: '400' });
-        const img = await doc.embedPng(await canvasPngBytes(t.canvas));
-        drawImageBox(page, img, { x: box.x, y: box.y, w: t.width, h: t.height });
+        const font = await embedVnFont(doc, it.font, it.bold, it.italic);
+        drawTextLines(page, it.text.replace(/\n$/, '').normalize('NFC'), {
+          x: box.x, y: box.y, size: it.size * scale, font, color: hexToRgb(it.color), align: it.align,
+          bg: it.bg && hexToRgb(it.bg), underline: it.underline, strike: it.strike,
+        });
       } else if (it.type === 'highlight') {
         drawRectBox(page, box, { color: hexToRgb(it.color), opacity: 0.4, blendMode: PDFLib.BlendMode.Multiply });
       } else if (it.type === 'rect') {
         drawRectBox(page, box, { borderColor: hexToRgb(it.color), borderWidth: 2 });
+      } else if (it.type === 'cover') {
+        drawRectBox(page, { x: box.x, y: box.y, w: box.w, h: box.h }, { color: hexToRgb(it.color) });
       } else if (it.type === 'whiteout') {
         drawRectBox(page, box, { color: rgb(1, 1, 1) });
       } else if (it.type === 'redact') {

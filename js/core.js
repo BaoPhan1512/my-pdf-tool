@@ -206,6 +206,88 @@ export function drawRectBox(page, box, opts) {
   page.drawRectangle({ x: p.x, y: p.y, width: box.w, height: box.h, rotate: degrees(r), ...opts });
 }
 
+/* ---------- Phông chữ tiếng Việt thật (chữ chọn/copy được trong PDF) ----------
+ * Arimo ~ Arial, Tinos ~ Times New Roman (cùng kích thước chữ, đủ dấu tiếng Việt) */
+let fontkitPromise;
+function loadFontkit() {
+  fontkitPromise ||= new Promise((res, rej) => {
+    if (window.fontkit) return res(window.fontkit);
+    const s = document.createElement('script');
+    s.src = new URL('../vendor/fontkit.umd.min.js', import.meta.url).href;
+    s.onload = () => res(window.fontkit); s.onerror = () => rej(new Error('Không tải được bộ phông chữ'));
+    document.head.append(s);
+  });
+  return fontkitPromise;
+}
+const fontBytesCache = new Map();
+// Danh sách phông chữ (đều có đủ dấu tiếng Việt). v = các kiểu có sẵn: r thường, i nghiêng, b đậm, bi đậm nghiêng
+export const FONTS = [
+  { id: 'arimo', label: 'Arial', note: 'Arimo', v: 'r i b bi', group: 'Phổ biến' },
+  { id: 'tinos', label: 'Times New Roman', note: 'Tinos', v: 'r i b bi', group: 'Phổ biến' },
+  { id: 'cousine', label: 'Courier New', note: 'Cousine', v: 'r i b bi', group: 'Phổ biến' },
+  { id: 'roboto', label: 'Roboto', v: 'r i b bi', group: 'Không chân' },
+  { id: 'open-sans', label: 'Open Sans', v: 'r i b bi', group: 'Không chân' },
+  { id: 'noto-sans', label: 'Noto Sans', v: 'r i b bi', group: 'Không chân' },
+  { id: 'inter', label: 'Inter', v: 'r i b bi', group: 'Không chân' },
+  { id: 'be-vietnam-pro', label: 'Be Vietnam Pro', v: 'r i b bi', group: 'Không chân' },
+  { id: 'montserrat', label: 'Montserrat', v: 'r i b bi', group: 'Không chân' },
+  { id: 'nunito', label: 'Nunito', v: 'r i b bi', group: 'Không chân' },
+  { id: 'noto-serif', label: 'Noto Serif', v: 'r i b bi', group: 'Có chân' },
+  { id: 'lora', label: 'Lora', v: 'r i b bi', group: 'Có chân' },
+  { id: 'merriweather', label: 'Merriweather', v: 'r i b bi', group: 'Có chân' },
+  { id: 'playfair-display', label: 'Playfair Display', v: 'r i b bi', group: 'Có chân' },
+  { id: 'dancing-script', label: 'Dancing Script', v: 'r b', group: 'Viết tay' },
+  { id: 'pacifico', label: 'Pacifico', v: 'r', group: 'Viết tay' },
+];
+const fontById = (id) => FONTS.find((f) => f.id === id) || FONTS[0];
+function fontVariant(id, bold, italic) {
+  const have = fontById(id).v.split(' ');
+  const want = `${bold ? 'b' : ''}${italic ? 'i' : ''}` || 'r';
+  return [want, bold ? 'b' : 'r', italic ? 'i' : 'r', 'r'].find((x) => have.includes(x));
+}
+export function fontUrl(id = 'arimo', bold = false, italic = false) {
+  const f = fontById(id);
+  return new URL(`../vendor/fonts/${f.id}-${fontVariant(f.id, bold, italic)}.ttf`, import.meta.url).href;
+}
+export const fontCss = (id) => `"F-${fontById(id).id}"`;
+// Khai báo @font-face để trình duyệt hiển thị đúng phông (chỉ tải khi dùng tới)
+(() => {
+  const css = FONTS.flatMap((f) => f.v.split(' ').map((k) =>
+    `@font-face{font-family:"F-${f.id}";font-weight:${k.includes('b') ? 700 : 400};font-style:${k.includes('i') ? 'italic' : 'normal'};font-display:swap;src:url("${new URL(`../vendor/fonts/${f.id}-${k}.ttf`, import.meta.url).href}") format("truetype")}`)).join('\n');
+  const st = document.createElement('style'); st.textContent = css; document.head.append(st);
+})();
+const docFonts = new WeakMap();
+export async function embedVnFont(doc, fontId, bold, italic) {
+  if (!docFonts.has(doc)) { doc.registerFontkit(await loadFontkit()); docFonts.set(doc, new Map()); }
+  const cache = docFonts.get(doc);
+  const url = fontUrl(fontId, bold, italic);
+  if (!cache.has(url)) {
+    if (!fontBytesCache.has(url)) fontBytesCache.set(url, fetch(url).then((r) => r.arrayBuffer()));
+    cache.set(url, doc.embedFont(await fontBytesCache.get(url), { subset: true }));
+  }
+  return cache.get(url);
+}
+export const BASELINE = 0.94; // vị trí đường chân chữ trong dòng cao 1.2em
+/** Vẽ nhiều dòng chữ; (x, y) = góc trên-trái theo hướng trang đang hiển thị (pt) */
+export function drawTextLines(page, text, { x, y, size, font, color, align = 'left', bg = null, underline = false, strike = false }) {
+  const { r } = displaySize(page);
+  const lines = String(text).split('\n');
+  const widths = lines.map((l) => font.widthOfTextAtSize(l, size));
+  const maxW = Math.max(0, ...widths);
+  lines.forEach((line, i) => {
+    if (!line) return;
+    const lx = x + (align === 'center' ? (maxW - widths[i]) / 2 : align === 'right' ? maxW - widths[i] : 0);
+    const top = y + 1.2 * size * i;
+    const base = top + size * BASELINE;
+    if (bg) drawRectBox(page, { x: lx, y: top, w: widths[i], h: 1.2 * size }, { color: bg });
+    const p = displayToPdf(page, lx, base);
+    page.drawText(line, { x: p.x, y: p.y, size, font, color, rotate: degrees(r) });
+    const deco = (dy) => drawRectBox(page, { x: lx, y: base + dy, w: widths[i], h: Math.max(0.5, size * 0.06) }, { color });
+    if (underline) deco(size * 0.1);
+    if (strike) deco(-size * 0.3);
+  });
+}
+
 /* ---------- Chữ tiếng Việt -> ảnh PNG (để không cần nhúng font) ---------- */
 export function textToPng(text, { size = 48, color = '#000', font = 'Arial, Helvetica, sans-serif', weight = '600', scale = 3, padding = 0.15 } = {}) {
   const lines = String(text).split('\n');
